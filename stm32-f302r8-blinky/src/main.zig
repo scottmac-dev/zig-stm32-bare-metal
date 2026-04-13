@@ -62,7 +62,6 @@ const GPIOB_BASE: u32 = 0x48000400;
 const GPIOB_MODER: *volatile u32 = @ptrFromInt(GPIOB_BASE + 0x00);
 const GPIOB_BSRR: *volatile u32 = @ptrFromInt(GPIOB_BASE + 0x18);
 
-const PIN_2_SHIFT: u3 = 4; // Pin 2 * 2
 const PIN_13_SHIFT: u5 = 26; // Pin 13 * 2 (for MODER/PUPDR)
 
 // ============================================================================
@@ -76,6 +75,7 @@ pub fn main() void {
     // Configure PB13 (LED) as Output (MODER bits [27:26] = 0b01)
     GPIOB_MODER.* &= ~(@as(u32, 0b11) << PIN_13_SHIFT);
     GPIOB_MODER.* |= (@as(u32, 0b01) << PIN_13_SHIFT);
+
     var led_on: bool = false;
 
     while (true) {
