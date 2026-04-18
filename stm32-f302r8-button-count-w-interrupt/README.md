@@ -5,7 +5,6 @@ Main loop sees flag set and emits COUNT: N over UART then clears flag
 
 ### Hardware
 - Board: STM32-NUCLEO-F302R8
-- LED: LD2 on PB13
 - Button: B1 on PC13 (active low)
 - UART: PA2 TX → ST-LINK virtual COM port
 
