@@ -8,6 +8,16 @@ Prints `ON` or `OFF` over USART2 (PA2 TX, 115200 8N1).
 - Button: B1 on PC13 (active low)
 - UART: PA2 TX → ST-LINK virtual COM port
 
+### Conceptual interaction
+- Super loop running 
+- Checks USER B1 button for current state 
+- If state has changed (pulled low to 0) and differs from last state
+    - Flip the armed flag
+        - If armed, write to PB13 to turn on led    
+        - Else reset PB13 to turn off led
+        - Spin for 200,000 cycles for time delay padding 
+- Save the current state and spin for 80,000 cycles for time delay
+
 ### Build
 ```bash
 zig build --release=small

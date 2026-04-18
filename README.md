@@ -8,3 +8,4 @@ Examples
 - **blinky:** blink green LD2 led on devboard in constant cycle
 - **toggle led:** toggle green LD2 led with blue B1 USER button and print state via UART
 - **systick:** blink green LD2 led on devboard using Cortex-M SysTick peripheral instead of primitive `noop` loop
+- **button count w\ interrupt:** pressing B1 USER button triggers EXTI interrupt and increments a counter, counter tally is transmitted over UART

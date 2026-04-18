@@ -7,6 +7,15 @@ and the main loop, replacing the NOP busy-wait delay used in the blinky example.
 - Board: STM32-NUCLEO-F302R8
 - LED: LD2 on PB13
 
+### Conceptual interaction
+- Configured to use Cortex-M systick capabilities 
+- Runs main super loop 
+- If sufficient clock ticks have occured (> 1000 = ~1 sec)
+    - Toggle led on flag 
+        - If flag on, write to register to turn on led  
+        - Else reset register to turn off led
+- Else do nothing, CPU free
+
 ### Timing
 Interval = RVR / clock_speed. If you reconfigure the PLL the RVR value
 must be updated to maintain 1ms ticks.

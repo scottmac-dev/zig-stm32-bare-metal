@@ -9,6 +9,15 @@ Main loop sees flag set and emits COUNT: N over UART then clears flag
 - Button: B1 on PC13 (active low)
 - UART: PA2 TX → ST-LINK virtual COM port
 
+### Conceptual interactions 
+- USER B1 pressed, PC13 register pulled low 1 -> 0
+- EXTI line 13 detects falling edge 
+- EXTI signals the NVIC
+- NVIC interrupts the CPU 
+- CPU jumps to handler logic 
+- Handler runs, increments counter, flips flag 
+- CPU resumes, super loop sees flag set, sends count over UART, clears flag
+
 ### Build
 ```bash
 zig build --release=small

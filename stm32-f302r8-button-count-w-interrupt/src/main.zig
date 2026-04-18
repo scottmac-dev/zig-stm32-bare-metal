@@ -17,6 +17,7 @@ const VectorTable = extern struct {
     initial_sp: *u32,
     reset: *const fn () callconv(.c) noreturn,
     exceptions: [14]*const fn () callconv(.c) void,
+    irqs: [41]*const fn () callconv(.c) void, // IRQ0..IRQ40
 };
 
 fn defaultHandler() callconv(.c) void {
@@ -42,6 +43,7 @@ export const vector_table linksection(".isr_vector") = VectorTable{
         defaultHandler, // PendSV
         sysTickHandler, // SysTick ← slot 14, index 13
     },
+    .irqs = .{defaultHandler} ** 40 ++ .{exti15_10Handler},
 };
 
 export fn Reset_Handler() noreturn {
@@ -73,6 +75,7 @@ export fn Reset_Handler() noreturn {
 const RCC_BASE: u32 = 0x40021000;
 const RCC_AHBENR: *volatile u32 = @ptrFromInt(RCC_BASE + 0x14); // clocks
 const RCC_APB1ENR: *volatile u32 = @ptrFromInt(RCC_BASE + 0x1C); // usart2
+const RCC_APB2ENR: *volatile u32 = @ptrFromInt(RCC_BASE + 0x18); // syscfg
 
 // PA2 for USART2 TX
 const GPIOA_BASE: u32 = 0x48000000;
@@ -83,7 +86,6 @@ const GPIOA_AFRL: *volatile u32 = @ptrFromInt(GPIOA_BASE + 0x20); // alternate f
 const GPIOC_BASE: u32 = 0x48000800;
 const GPIOC_MODER: *volatile u32 = @ptrFromInt(GPIOC_BASE + 0x00);
 const GPIOC_PUPDR: *volatile u32 = @ptrFromInt(GPIOC_BASE + 0x0C);
-const GPIOC_IDR: *volatile u32 = @ptrFromInt(GPIOC_BASE + 0x10);
 
 // USART2
 const USART2_BASE: u32 = 0x40004400;
@@ -100,8 +102,34 @@ const SYST_CSR: *volatile u32 = @ptrFromInt(0xE000E010); // control and status
 const SYST_RVR: *volatile u32 = @ptrFromInt(0xE000E014); // reload value
 const SYST_CVR: *volatile u32 = @ptrFromInt(0xE000E018); // current value
 
+// SYSCFG has a set of EXTICRx registers mapping GPIO ports to EXTI lines, each register is 4 pins
+const SYSCFG_BASE: u32 = 0x40010000;
+const SYSCFG_EXTICR4: *volatile u32 = @ptrFromInt(SYSCFG_BASE + 0x14);
+
+// EXTI
+const EXTI_BASE: u32 = 0x40010400;
+const EXTI_IMR: *volatile u32 = @ptrFromInt(EXTI_BASE + 0x00); // interrupt mask
+const EXTI_FTSR: *volatile u32 = @ptrFromInt(EXTI_BASE + 0x0C); // falling trigger selection
+// pending register, set when EXTI detects edge, must be cleared to prevent infinite handler loop
+// clearing it is done by writing a 1 to the bit (not 0 — this is a write-1-to-clear register) eg EXTI_PR.* = (1 << 13);
+const EXTI_PR: *volatile u32 = @ptrFromInt(EXTI_BASE + 0x14);
+
+// NVIC
+// IRQ = interrupt request
+// ISER = interrupt set enable register
+// The CPU NVIC has a ISER register where each bit corresponds to a IRQ number, setting bit enables it
+const NVIC_ISER1: *volatile u32 = @ptrFromInt(0xE000E104); // IRQs 32-63
+
+// FLAGS: volatile global shared state
 var ticks: u32 = 0; // written by the interrupt handler, read by main
 const ticks_ptr: *volatile u32 = &ticks; // must be volatile to not be optimized away
+
+var button_flag: bool = false; // set by interrupt when pressed
+const button_pressed: *volatile bool = &button_flag;
+
+var press_tick: u32 = 0; // total tick time since boot
+const press_tick_ptr: *volatile u32 = &press_tick;
+var last_press_tick: u32 = 0; // for debounce
 
 // ============================================================================
 // 3. MAIN LOGIC (Button / LED Toggle)
@@ -115,12 +143,26 @@ pub fn main() void {
     // Enable clock for USART2 on APB1
     RCC_APB1ENR.* |= (1 << 17);
 
+    // Enable SYSCFG clock on APB2
+    RCC_APB2ENR.* |= (1 << 0);
+
     // SysTick: interrupt every 1ms
     // interval = RVR / clock_speed
     // 8MHz / 8000 = 1000 ticks per second
     SYST_RVR.* = 8_000 - 1; // reload value (counts down to 0)
     SYST_CVR.* = 0; // clear current value
     SYST_CSR.* = 0b111; // enable counter, enable interrupt, use processor clock
+
+    // Ensures EXTI13 listens to GPIOC port
+    SYSCFG_EXTICR4.* &= ~(@as(u32, 0xF) << 4); // clear bits [7:4]
+    SYSCFG_EXTICR4.* |= (@as(u32, 0b0010) << 4); // route GPIOC to EXTI13
+
+    // Ensures button PC13 pulled low will fire the EXTI interrupt
+    EXTI_FTSR.* |= (1 << 13); // trigger on falling edge for line 13
+    EXTI_IMR.* |= (1 << 13); // unmask EXTI line 13
+
+    // ISER1 covers 32-63, IRQ40 falls in ISER1 at bit 8
+    NVIC_ISER1.* |= (1 << 8); // enable IRQ40 (EXTI15_10)
 
     // Configure PA2 to alternate function mode, clear (MODER bits [5:4]) by setting to 0b10
     GPIOA_MODER.* &= ~(@as(u32, 0b11) << PIN_2_SHIFT);
@@ -142,25 +184,28 @@ pub fn main() void {
     USART2_CR1.* |= (1 << 0);
     USART2_CR1.* |= (1 << 3);
 
-    var last_button: u1 = 1; // Pulled high by default
-    var last_tick: u32 = 0;
-    var count: u8 = 0;
+    var count: u32 = 0;
+    var last_print_tick: u32 = 0;
 
+    // MAIN loop
     while (true) {
-        // Poll every 200ms
-        if (ticks_ptr.* - last_tick >= 200) {
-            last_tick = ticks_ptr.*; // update
 
-            // Read PC13
-            const current_button: u1 = if ((GPIOC_IDR.* & (1 << 13)) != 0) 1 else 0;
+        // now handled by interrupt set flag instead of polling for button state
+        if (button_pressed.*) {
+            button_pressed.* = false; // clear to prevent infinite handler
+            count += 1;
 
-            // Detect falling edge (button press)
-            if (last_button == 1 and current_button == 0) {
-                count += 1;
-                uartPrintCount("COUNT: ");
-            }
+            const elapsed = press_tick_ptr.* - last_print_tick;
+            last_print_tick = press_tick_ptr.*;
 
-            last_button = current_button;
+            // Print btn count
+            uartPrint("COUNT: ");
+            uartSendU32(count);
+
+            // Print elapsed time since last press
+            uartPrint(" ELAPSED: ");
+            uartSendU32(elapsed);
+            uartPrint("ms\r\n");
         }
     }
 }
@@ -170,6 +215,20 @@ fn sysTickHandler() callconv(.c) void {
     ticks_ptr.* += 1;
 }
 
+fn exti15_10Handler() callconv(.c) void {
+    // Check it was line 13 that fired (lines 10-15 share this IRQ)
+    if ((EXTI_PR.* & (1 << 13)) != 0) {
+        EXTI_PR.* = (1 << 13); // clear pending flag
+
+        // DEBOUNCE: Ignore if less than 100ms since last press
+        if (ticks_ptr.* - last_press_tick >= 100) {
+            last_press_tick = ticks_ptr.*;
+            press_tick_ptr.* = ticks_ptr.*;
+            button_pressed.* = true;
+        }
+    }
+}
+
 /// Send single byte over UART2
 fn uartSendByte(byte: u8) void {
     // Wait until TXE (bit 7) is set
@@ -177,12 +236,37 @@ fn uartSendByte(byte: u8) void {
     USART2_TDR.* = byte;
 }
 
+/// UART can't send u32 only raw u8 bytes
+/// Even raw u8 bytes wont be visible in output as u8 0 is not ASCII printable 0
+/// To handle printing, extract each single number in the whole, eg 23 = 2, 3 and convert to ASCII
+/// ASCII 0 starts at u8 value 48
+fn uartSendU32(n: u32) void {
+    if (n == 0) {
+        uartSendByte('0');
+        return;
+    }
+
+    // Build digits in reverse into a small buffer
+    var buf: [10]u8 = undefined; // u32 max is 4294967295, 10 digits
+    var i: usize = 0;
+    var remaining = n;
+
+    while (remaining > 0) {
+        buf[i] = @intCast(remaining % 10 + '0'); // '0' is u8 value 48
+        remaining /= 10;
+        i += 1;
+    }
+
+    // Send in reverse (we built it backwards)
+    while (i > 0) {
+        i -= 1;
+        uartSendByte(buf[i]);
+    }
+}
+
 /// Print a string using single byte writes
-fn uartPrintCount(s: []const u8) void {
+fn uartPrint(s: []const u8) void {
     for (s) |byte| {
         uartSendByte(byte);
     }
-    uartSendByte('a');
-    uartSendByte('\r');
-    uartSendByte('\n');
 }
