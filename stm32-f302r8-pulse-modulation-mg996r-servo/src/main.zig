@@ -109,7 +109,7 @@ var ticks: u32 = 0; // written by the interrupt handler, read by main
 const ticks_ptr: *volatile u32 = &ticks; // must be volatile to not be optimized away
 
 // ============================================================================
-// 3. MAIN LOGIC (Button / LED Toggle)
+// 3. MAIN LOGIC (Servo motor sweep)
 // ============================================================================
 pub fn main() void {
     // Enable clocks for AHB

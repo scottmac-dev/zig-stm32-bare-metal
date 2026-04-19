@@ -132,7 +132,7 @@ const press_tick_ptr: *volatile u32 = &press_tick;
 var last_press_tick: u32 = 0; // for debounce
 
 // ============================================================================
-// 3. MAIN LOGIC (Button / LED Toggle)
+// 3. MAIN LOGIC (Button count w/ interrupt handler)
 // ============================================================================
 pub fn main() void {
     // Enable clocks for AHB

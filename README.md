@@ -14,3 +14,4 @@ Examples
 ### Other hardware referenced
 - [MG996R](https://www.aliexpress.com/item/1005010238268698.html?src=google)
   servo motor
+- [MAX4466](https://core-electronics.com.au/electret-microphone-amplifier-max4466-with-adjustable-gain.html?gad_source=1&gad_campaignid=17417005429&gbraid=0AAAAADlEpP7WefH90CDW_Bq9E3NNVBA5r&gclid=Cj0KCQjw-pHPBhCdARIsAHXYWP_AKDqfGRbUu8EXdiWPBnWh0JH_cljkjgZGPJmPXmoum1gFIBuUh_kaAiJFEALw_wcB) Adafruit microphone amplifier
