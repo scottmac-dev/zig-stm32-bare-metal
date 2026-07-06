@@ -174,30 +174,6 @@ pub fn main() void {
     lcdCmd(0xC0); // cursor to row 2, col 0
     lcdPrint("I2C LCD works!");
 
-    // TODO: debug IMU, not being detected currently in I2C scan
-    // Try both possible LSM6DSOX addresses
-    var who: [1]u8 = undefined;
-    _ = blk: {
-        if (i2cReadReg(0x6A, 0x0F, &who)) {
-            uartPrint("Found at 0x6A\r\n");
-            break :blk 0x6A;
-        } else if (i2cReadReg(0x6B, 0x0F, &who)) {
-            uartPrint("Found at 0x6B\r\n");
-            break :blk 0x6B;
-        } else {
-            uartPrint("No device found on I2C\r\n");
-            break :blk 0x6A; // default, will fail gracefully
-        }
-    };
-
-    if (who[0] == 0x6C) {
-        uartPrint("LSM6DSOX OK\r\n");
-    } else {
-        uartPrint("WHO_AM_I wrong: ");
-        uartSendU32(who[0]);
-        uartPrint("\r\n");
-    }
-
     // SysTick
     SYST_RVR.* = 64_000 - 1; // 1ms tick at 64MHz
     SYST_CVR.* = 0;
@@ -205,14 +181,78 @@ pub fn main() void {
     uartPrint("INIT OK\r\n");
 
     // Main loop 
-    while (true) {
+    var last_tick: u32 = 0;
 
+    //var print_word: bool = true;
+    //var print_count: u32 = 0;
+
+    // Expected pattern 
+    // Clear 
+    // Print top 
+    // CLear 
+    // Print bottom
+    // while (true) {
+    //     // Toggle every 3000ms (3000 ticks), CPU free in meantime, no spin delay and burnt cycles
+    //     // ticks - last_tick works due to integer overflow wrapping
+    //     if (ticks_ptr.* - last_tick >= 3_000) {
+    //         last_tick = ticks_ptr.*; // update
+    //         print_word = !print_word; // toggle
+    //
+    //         // Set based on new toggled state
+    //         if (print_word) {
+    //             if(print_count % 2 == 0) {
+    //                 // Top row
+    //                 lcdCmd(0x80);
+    //                 lcdPrint("Top");
+    //             } else {
+    //                 // Bottom row
+    //                 lcdCmd(0xC0);   // 0x80 + 64 = 0xC0
+    //                 lcdPrint("Bottom");
+    //             }
+    //             print_count += 1;
+    //         } else {
+    //             // Clear 
+    //             lcdCmd(CLEAR);
+    //         }
+    //     }
+    // }
+    
+    // Expected pattern 
+    // Moving moves accross top and bottom row
+    // Naieve clear and draw, could just shift 
+    var pos: u8 = 0;
+    while (true) {
+        if (ticks_ptr.* - last_tick >= 500) {
+            last_tick = ticks_ptr.*; // update
+            lcdCmd(CLEAR);
+            const cursor_pos: u8 = 128 + pos;
+            lcdCmd(cursor_pos);
+            pos += 1;
+            if(pos == 15) pos = 64;
+            if(pos == 79) pos = 0;
+            lcdPrint("Moving");
+        }
     }
 }
 
 // ============================================================================
 // 5. HELPERS / HANDLERS
 // ============================================================================
+
+// HD44780 Instruction Set 
+const CLEAR: u8 = 0x01;
+const CUR_HOME: u8 = 0x02; // unshift display
+const DISP_OFF: u8 = 0x08;
+const BLINK_CURS: u8 = 0x0F;
+const CUR_LEFT: u8 = 0x10;
+const CUR_RIGHT: u8 = 0x14;
+const DISP_LEFT: u8 = 0x18;
+const DISP_RIGHT: u8 = 0x1c;
+
+// CURSOR POSITION = 0x80 + pos decimal 
+// 16 x 2 display 
+// Line 1 = pos 0-15
+// Line 2 = pos 64-79 as HD44780 designed for 40 character 4 line display
 
 /// SysTick interrupt handler
 fn sysTickHandler() callconv(.c) void {
@@ -519,6 +559,7 @@ fn lcdPrint(s: []const u8) void {
         lcdChar(c);
     }
 }
+
 
 /// Microsecond delay using nop loops at 64MHz
 /// Roughly 64 nops = 1us
