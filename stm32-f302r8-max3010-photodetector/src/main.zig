@@ -1,5 +1,7 @@
 // STM32F302R8 bare metal
 
+
+
 // ============================================================================
 // 1. LINKER SYMBOLS & STARTUP (Previously startup.zig)
 // ============================================================================
@@ -164,14 +166,43 @@ pub fn main() void {
     uartPrint("I2C OK\r\n");
     i2cScan();
 
+    // MAX3010 driver init
+    if (!max30101CheckPartId()) {
+        uartPrint("MAX30101 not found!\r\n");
+    }
+
+    if (max30101Init()) {
+        uartPrint("MAX30101 INIT OK\r\n");
+    } else {
+        uartPrint("MAX30101 INIT FAILED\r\n");
+    }
+
     // SysTick
     SYST_RVR.* = 64_000 - 1; // 1ms tick at 64MHz
     SYST_CVR.* = 0;
     SYST_CSR.* = 0b111;
+
     uartPrint("INIT OK\r\n");
 
-    while (true) {
+    // State
+    var last_tick: u32 = 0;
+    var red: u32 = 0;
+    var ir: u32 = 0;
 
+    while (true) {
+        // Print every 10ms
+        if (ticks_ptr.* - last_tick >= 10) {
+            last_tick = ticks_ptr.*; // update
+
+            if (max30101ReadSample(&red, &ir)) {
+                //uartPrint("RED: ");
+                uartSendU32(red);
+                uartPrint(",");
+                //uartPrint("  IR: ");
+                uartSendU32(ir);
+                uartPrint("\r\n");
+            }
+        }
     }
 }
 
@@ -402,6 +433,48 @@ fn i2cReadReg(addr: u7, reg: u8, buf: []u8) bool {
     return true;
 }
 
+
+/// Raw I2C write — just send bytes, no register address
+fn i2cWriteRaw(addr: u7, buf: []const u8) bool {
+    var timeout: u32 = 100_000;
+    while ((I2C1_ISR.* & (1 << 15)) != 0) {
+        timeout -= 1;
+        if (timeout == 0) return false;
+    }
+
+    I2C1_ICR.* |= (1 << 4);
+    I2C1_CR2.* = (@as(u32, addr) << 1) |
+                 (@as(u32, buf.len) << 16) |
+                 (1 << 25) |  // AUTOEND
+                 (0 << 10);   // write
+    I2C1_CR2.* |= (1 << 13); // START
+
+    for (buf) |byte| {
+        timeout = 100_000;
+        while ((I2C1_ISR.* & (1 << 1)) == 0) {
+            if ((I2C1_ISR.* & (1 << 4)) != 0) return false;
+            timeout -= 1;
+            if (timeout == 0) return false;
+        }
+        I2C1_TXDR.* = byte;
+    }
+
+    timeout = 100_000;
+    while ((I2C1_ISR.* & (1 << 5)) == 0) {
+        timeout -= 1;
+        if (timeout == 0) return false;
+    }
+    I2C1_ICR.* |= (1 << 5);
+    return true;
+}
+
+/// Write a single register: send reg address then value byte
+fn i2cWriteReg(addr: u7, reg: u8, value: u8) bool {
+    var buf = [2]u8{ reg, value };
+    return i2cWriteRaw(addr, &buf);
+}
+
+
 /// Microsecond delay using nop loops at 64MHz
 /// Roughly 64 nops = 1us
 fn delay_us(us: u32) void {
@@ -413,4 +486,97 @@ fn delay_us(us: u32) void {
 
 fn delay_ms(ms: u32) void {
     delay_us(ms * 1000);
+}
+
+
+// ============================================================================
+// MAX30101 driver
+// ============================================================================
+const MAX30101_ADDR: u7 = 0x57;
+
+// Register map
+const REG_INT_STATUS_1: u8 = 0x00;
+const REG_INT_ENABLE_1: u8 = 0x02;
+const REG_FIFO_WR_PTR:  u8 = 0x04;
+const REG_OVF_COUNTER:  u8 = 0x05;
+const REG_FIFO_RD_PTR:  u8 = 0x06;
+const REG_FIFO_DATA:    u8 = 0x07;
+const REG_FIFO_CONFIG:  u8 = 0x08;
+const REG_MODE_CONFIG:  u8 = 0x09;
+const REG_SPO2_CONFIG:  u8 = 0x0A;
+const REG_LED1_PA:      u8 = 0x0C; // RED
+const REG_LED2_PA:      u8 = 0x0D; // IR
+const REG_PART_ID:      u8 = 0xFF;
+
+/// Read and print the part ID as a sanity check (should be 0x15)
+fn max30101CheckPartId() bool {
+    var buf: [1]u8 = undefined;
+    if (!i2cReadReg(MAX30101_ADDR, REG_PART_ID, &buf)) {
+        uartPrint("PART ID read failed\r\n");
+        return false;
+    }
+    uartPrint("PART ID: ");
+    uartSendU32(buf[0]);
+    uartPrint("\r\n");
+    return buf[0] == 0x15;
+}
+
+/// Bring up the sensor: reset, FIFO config, SpO2 mode, LED currents
+fn max30101Init() bool {
+    // Soft reset — bit 6 of MODE_CONFIG
+    if (!i2cWriteReg(MAX30101_ADDR, REG_MODE_CONFIG, 0x40)) return false;
+
+    // Wait for reset bit to clear itself
+    var buf: [1]u8 = undefined;
+    var timeout: u32 = 100_000;
+    while (timeout > 0) : (timeout -= 1) {
+        if (!i2cReadReg(MAX30101_ADDR, REG_MODE_CONFIG, &buf)) return false;
+        if ((buf[0] & 0x40) == 0) break;
+    }
+    if (timeout == 0) {
+        uartPrint("MAX30101 reset timeout\r\n");
+        return false;
+    }
+
+    // FIFO config: no averaging, rollover ENABLED (bit 4, correct this time)
+    if (!i2cWriteReg(MAX30101_ADDR, REG_FIFO_CONFIG, 0x10)) return false;
+
+    // Clear FIFO pointers
+    if (!i2cWriteReg(MAX30101_ADDR, REG_FIFO_WR_PTR, 0x00)) return false;
+    if (!i2cWriteReg(MAX30101_ADDR, REG_OVF_COUNTER, 0x00)) return false;
+    if (!i2cWriteReg(MAX30101_ADDR, REG_FIFO_RD_PTR, 0x00)) return false;
+
+    // SpO2 config: ADC range, sample rate 100Hz, pulse width 411us (18-bit resolution)
+    if (!i2cWriteReg(MAX30101_ADDR, REG_SPO2_CONFIG, 0x27)) return false;
+
+    // LED currents — moderate starting point, ~7mA
+    if (!i2cWriteReg(MAX30101_ADDR, REG_LED1_PA, 0x24)) return false; // RED
+    if (!i2cWriteReg(MAX30101_ADDR, REG_LED2_PA, 0x24)) return false; // IR
+
+    // Mode config: 0x03 = SpO2 mode (RED + IR both active)
+    if (!i2cWriteReg(MAX30101_ADDR, REG_MODE_CONFIG, 0x03)) return false;
+
+    return true;
+}
+
+/// Read one FIFO sample if available. Returns true and fills red/ir if new data was read.
+fn max30101ReadSample(red: *u32, ir: *u32) bool {
+    var wr_buf: [1]u8 = undefined;
+    var rd_buf: [1]u8 = undefined;
+    if (!i2cReadReg(MAX30101_ADDR, REG_FIFO_WR_PTR, &wr_buf)) return false;
+    if (!i2cReadReg(MAX30101_ADDR, REG_FIFO_RD_PTR, &rd_buf)) return false;
+
+    if (wr_buf[0] == rd_buf[0]) {
+        // no new samples
+        return false;
+    }
+
+    // Each sample in SpO2 mode = 6 bytes: 3 bytes RED, 3 bytes IR
+    var sample: [6]u8 = undefined;
+    if (!i2cReadReg(MAX30101_ADDR, REG_FIFO_DATA, &sample)) return false;
+
+    // 18-bit values, top 6 bits of each 3-byte word are unused/zero
+    red.* = (@as(u32, sample[0]) << 16 | @as(u32, sample[1]) << 8 | @as(u32, sample[2])) & 0x03FFFF;
+    ir.*  = (@as(u32, sample[3]) << 16 | @as(u32, sample[4]) << 8 | @as(u32, sample[5])) & 0x03FFFF;
+    return true;
 }
