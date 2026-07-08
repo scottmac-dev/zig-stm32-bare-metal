@@ -11,9 +11,12 @@ Examples
 - **button count w\ interrupt:** pressing B1 USER button triggers EXTI interrupt and increments a counter, counter tally is transmitted over UART
 - **pulse modulation mg996r servo sweep:**  sweep MG996R servo motor across full range using TIM1 hardware PWM, no CPU involvement once configured
 - **i2c-lcd:** transmit data to print/display on a LCD screen over i2c
+- **max3010-photodetector:** read heart rate sensor data from max30101 breakout
+  board over I2c and display in python visualizer
 
 ### Other hardware referenced
 - [MG996R](https://www.aliexpress.com/item/1005010238268698.html?src=google)
   servo motor
 - [MAX4466](https://core-electronics.com.au/electret-microphone-amplifier-max4466-with-adjustable-gain.html?gad_source=1&gad_campaignid=17417005429&gbraid=0AAAAADlEpP7WefH90CDW_Bq9E3NNVBA5r&gclid=Cj0KCQjw-pHPBhCdARIsAHXYWP_AKDqfGRbUu8EXdiWPBnWh0JH_cljkjgZGPJmPXmoum1gFIBuUh_kaAiJFEALw_wcB) Adafruit microphone amplifier
 - [Freenove 1602IIC LCD](https://store.freenove.com/products/fnk0079?srsltid=AfmBOooiG-t7zq1dTPShTSsrZg1f14QeL1oeI1m7ojo6D4JCPcSA4r9X)
+- [MAX30101](https://core-electronics.com.au/sparkfun-photodetector-breakout-max30101-qwiic.html)

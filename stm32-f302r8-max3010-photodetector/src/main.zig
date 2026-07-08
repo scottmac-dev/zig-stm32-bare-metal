@@ -190,8 +190,8 @@ pub fn main() void {
     var ir: u32 = 0;
 
     while (true) {
-        // Print every 10ms
-        if (ticks_ptr.* - last_tick >= 10) {
+        // Print every 20ms
+        if (ticks_ptr.* - last_tick >= 20) {
             last_tick = ticks_ptr.*; // update
 
             if (max30101ReadSample(&red, &ir)) {
